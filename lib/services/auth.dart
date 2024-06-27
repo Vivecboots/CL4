@@ -1,7 +1,7 @@
 // Put firebase authentication here
+import 'dart:async';
 import 'dart:io';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
@@ -23,6 +23,8 @@ var actionCodeSettings = ActionCodeSettings(
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
+  FirebaseAuth get auth => _auth;
+
   User? getUser() {
     return _auth.currentUser;
   }
@@ -39,7 +41,7 @@ class AuthService {
     }
   }
 
-  // Sign in with email link (password-less)
+  // TODO: Sign in with email link (password-less)
   Future<void> signInWithEmailLink(String email) async {
     try {
       await _auth.sendSignInLinkToEmail(email: email, actionCodeSettings: actionCodeSettings);
@@ -47,6 +49,77 @@ class AuthService {
     } catch (e) {
       print('Error sending email verification: $e');
       rethrow;
+    }
+  }
+
+  // Sign in with phone number
+  Future<void> sendCodeToPhoneNumber(
+      String phoneNumber,
+      void Function (ConfirmationResult confirmationResult) onConfirmationResult, // Web only
+      void Function(String verificationId) onCodeSent, // Native only
+      void Function(PhoneAuthCredential credential) onAutoResolution // Android only
+      ) async {
+    // Web
+    if (kIsWeb) {
+      // Wait for the user to complete the reCAPTCHA & for an SMS code to be sent.
+      ConfirmationResult confirmationResult = await _auth.signInWithPhoneNumber(phoneNumber);
+      onConfirmationResult(confirmationResult);
+    } else if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
+      await _auth.verifyPhoneNumber(
+        phoneNumber: phoneNumber,
+        // Doc: https://firebase.flutter.dev/docs/auth/phone
+        verificationCompleted: (PhoneAuthCredential credential) {
+          // ANDROID ONLY!
+          // This handler will only be called on Android devices which support automatic SMS code resolution.
+          // Sign the user in (or link) with the auto-generated credential
+          print("verificationCompleted...");
+          onAutoResolution(credential);
+        },
+        verificationFailed: (FirebaseAuthException e) {
+          // If Firebase returns an error,
+          // for example for an incorrect phone number or if the SMS quota for the project has exceeded, a FirebaseAuthException will be sent to this handler.
+          print("verificationFailed...");
+          throw (e);
+        },
+        codeSent: (String verificationId, int? resendToken) async {
+          // When Firebase sends an SMS code to the device, this handler is triggered with a verificationId and resendToken
+          // (A resendToken is only supported on Android devices, iOS devices will always return a null value).
+          print("codeSent...");
+          onCodeSent(verificationId);
+        },
+        codeAutoRetrievalTimeout: (String verificationId) {
+          print("codeAutoRetrievalTimeout! Now using normal login method instead");
+        },
+      );
+    } else {
+      throw PlatformException(code: "invalid-platform", details: "signInWithPhoneNumber() only supports Web, Android, IOS, and MacOS");
+    }
+  }
+
+  Future<User?> signInWithSMSCode({required String smsCode, ConfirmationResult? confirmationResult, PhoneAuthCredential? phoneAuthCredential, String? verificationId}) async {
+    if (kIsWeb) {
+      if (confirmationResult == null) {
+        throw Exception("signInWithSMSCode: confirmationResult is null in Web");
+      }
+      try {
+        UserCredential userCredential = await confirmationResult.confirm(smsCode);
+        return userCredential.user;
+      } catch (e) {
+        rethrow;
+      }
+    } else if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
+      if (verificationId == null && phoneAuthCredential == null) {
+        throw Exception("signInWithSMSCode: verificationId & phoneAuthCredential are both null in Native");
+      }
+      try {
+        PhoneAuthCredential credential = phoneAuthCredential ?? PhoneAuthProvider.credential(verificationId: verificationId!, smsCode: smsCode);
+        UserCredential userCredential = await _auth.signInWithCredential(credential);
+        return userCredential.user;
+      } catch (e) {
+        rethrow;
+      }
+    } else {
+      throw PlatformException(code: "invalid-platform", details: "signInWithSMSCode() only supports Web, Android, IOS, and MacOS");
     }
   }
 
@@ -115,7 +188,6 @@ class AuthService {
     }
   }
 
-
   Future<void> sendPasswordResetEmailTo(String email) async {
     try {
       await _auth.sendPasswordResetEmail(email: email);
@@ -137,3 +209,6 @@ class AuthService {
     }
   }
 }
+
+
+
